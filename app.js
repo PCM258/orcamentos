@@ -3,7 +3,7 @@
    Honorários de projeto (descontos, proposta, pagamentos e recibos), estrutura em betão por traço,
    alvenaria por tipo de bloco, portas e janelas, materiais por piso e mão de obra em meticais.
    Dados no próprio aparelho; exportar/importar para partilhar. */
-const VERSAO = '0.3.0';
+const VERSAO = '0.4.0';
 const KEY = 'pcorc.v1';
 let S;            // estado
 let outs = null;  // valores calculados da vista atual (atualizam enquanto escreve)
@@ -186,8 +186,45 @@ function loadState() {
 // Depois de carregar: pagamentos antigos sem valor = valor total do projeto
 function posMigrar() { for (const o of S.obras) for (const p of o.pagamentos) if (p.valor == null) p.valor = honor(o.honor).total; }
 let tSave;
-function saveNow() { clearTimeout(tSave); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Não foi possível guardar neste aparelho.'); } }
+function guardarLocal() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Não foi possível guardar neste aparelho.'); } }
+function saveNow() { clearTimeout(tSave); guardarLocal(); if (window.SYNC && SYNC.ativo && SYNC.ativo()) SYNC.push(); }
 function save() { clearTimeout(tSave); tSave = setTimeout(saveNow, 250); }
+const sincroniza = () => !!(window.SYNC && SYNC.ativo && SYNC.ativo());
+
+/* Ligação ao módulo de sincronização (sync.js) */
+let renderPendente = false;
+function renderRemoto() {
+  const a = document.activeElement;
+  if (a && a.closest && a.closest('#app') && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) { renderPendente = true; refresh(); return; } // não interrompe quem está a escrever
+  render();
+}
+document.addEventListener('focusout', () => setTimeout(() => {
+  const a = document.activeElement;
+  if (renderPendente && !(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) { renderPendente = false; render(); }
+}, 60));
+function estadoSync() {
+  const el = $('#sync'); if (!el) return;
+  const Y = window.SYNC;
+  if (!Y) { el.hidden = true; return; }
+  el.hidden = false;
+  const e = Y.estado ? Y.estado() : {};
+  let cls = 'off', txt = 'Entrar';
+  if (e.falhou) { cls = 'err'; txt = 'Sem sincronização'; }
+  else if (e.email) {
+    if (e.erro) { cls = 'err'; txt = 'Sem acesso'; }
+    else if (!e.online) { cls = 'off'; txt = 'Sem internet'; }
+    else if (e.pend || !e.verificado) { cls = 'pend'; txt = 'A sincronizar…'; }
+    else { cls = 'ok'; txt = 'Sincronizado'; }
+  }
+  el.className = 'sync ' + cls; el.querySelector('span').textContent = txt;
+  if (route()[0] === 'conta') renderRemoto();
+}
+window.APP = {
+  S: () => S,
+  remoto() { S = migrate(S); posMigrar(); guardarLocal(); renderRemoto(); },
+  guardar: saveNow, renderRemoto, estadoSync, toast,
+  imgLocal: k => IMG.get(k)
+};
 addEventListener('pagehide', saveNow);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
 
@@ -198,14 +235,24 @@ const IMG = {
     return this.p;
   },
   async get(k) { try { const db = await this.open(); return await new Promise(res => { const q = db.transaction('img').objectStore('img').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (e) { return null; } },
-  async set(k, v) { const db = await this.open(); return new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'); t.objectStore('img').put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); },
-  async del(k) { try { const db = await this.open(); db.transaction('img', 'readwrite').objectStore('img').delete(k); } catch (e) { } }
+  async set(k, v, soLocal) { const db = await this.open(); await new Promise((res, rej) => { const t = db.transaction('img', 'readwrite'); t.objectStore('img').put(v, k); t.oncomplete = () => res(); t.onerror = () => rej(t.error); }); if (!soLocal && sincroniza()) SYNC.imgUp(k, v); },
+  async del(k) { try { const db = await this.open(); db.transaction('img', 'readwrite').objectStore('img').delete(k); } catch (e) { } if (sincroniza()) SYNC.imgDel(k); }
 };
-async function hidratarImgs() { for (const el of document.querySelectorAll('img[data-img]')) { const v = await IMG.get(el.dataset.img); if (v) el.src = v; else el.closest('.thumb, figure')?.remove(); } }
-function reduzirImagem(file, max = 1600) {
+async function hidratarImgs() {
+  for (const el of document.querySelectorAll('img[data-img]')) {
+    const id = el.dataset.img; let v = await IMG.get(id);
+    if (!v && sincroniza()) { v = await SYNC.imgGet(id); if (v) IMG.set(id, v, true); }
+    if (v) el.src = v; else (el.closest('.thumb, figure') || el).remove();
+  }
+}
+function reduzirImagem(file, max = 1600, tipo = 'image/jpeg') {
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(file); const im = new Image();
-    im.onload = () => { const k = Math.min(1, max / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', 0.82)); };
+    im.onload = () => {
+      const k = Math.min(1, max / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+      const g = c.getContext('2d'); if (tipo === 'image/jpeg') { g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); }
+      g.drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c.toDataURL(tipo, 0.85));
+    };
     im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Imagem inválida')); };
     im.src = url;
   });
@@ -420,6 +467,7 @@ function render() {
     html = tab === 'recibo' ? vRecibo(S.obras[i], extra) : tab === 'propdoc' ? vProposta(S.obras[i]) : vObra(i, tab || 'dados');
   } else if (v === 'precos') html = vPrecos();
   else if (v === 'definicoes') html = vDef();
+  else if (v === 'conta') html = vConta();
   else html = vObras();
   $('#app').innerHTML = html;
   refresh(); hidratarImgs();
@@ -453,7 +501,9 @@ const TABS = [['dados', 'Dados'], ['projeto', 'Projeto'], ['estrutura', 'Estrutu
 function vObra(i, tab) {
   const o = S.obras[i], P = `obras.${i}`;
   outs = () => ({ titulo: o.nome || 'Sem nome', total: mt0(calcObra(o).total) });
-  const head = `<div class="head"><div><a href="#/" class="back">← Obras</a><h1 data-o="titulo"></h1></div><div class="tot"><small>Total da obra</small><b data-o="total"></b></div></div>`;
+  const mt_ = sincroniza() && SYNC.meta(o.id);
+  const alt = mt_ && mt_.por ? `<small class="muted">Última alteração: ${esc(mt_.por)}${mt_.em ? ' · ' + mt_.em.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</small>` : '';
+  const head = `<div class="head"><div><a href="#/" class="back">← Obras</a><h1 data-o="titulo"></h1>${alt}</div><div class="tot"><small>Total da obra</small><b data-o="total"></b></div></div>`;
   const tabs = `<nav class="tabs">${TABS.map(([k, t]) => `<a href="#/obra/${o.id}/${k}" class="${k === tab ? 'on' : ''}">${t}</a>`).join('')}</nav>`;
   const f = { dados: tDados, projeto: tProjeto, estrutura: tEstrutura, alvenaria: tAlvenaria, mo: tMO, resumo: tResumo, proposta: tProposta }[tab] || tDados;
   return head + tabs + f(o, P);
@@ -482,7 +532,7 @@ function tDados(o, P) {
   <p class="muted small">Registe cada pagamento do cliente (sinal, prestações, pagamento final). Cada pagamento tem o seu recibo, com número próprio, que pode imprimir, guardar em PDF ou enviar.</p>
   <div class="totals" style="margin-bottom:12px"><div><small>Valor do projeto</small><b data-o="rProj"></b></div><div><small>Já pago</small><b data-o="rPago"></b></div><div><small>Em falta</small><b data-o="rFalta" style="color:var(--blue)"></b></div></div>
   ${o.pagamentos.length ? `<div class="tw"><table><thead><tr><th>Recibo nº</th><th></th><th>Data</th><th>Descrição</th><th>Valor (MT)</th><th>Forma</th><th>Referência</th><th></th></tr></thead><tbody>
-  ${o.pagamentos.map((p, j) => { const Q = `${P}.pagamentos.${j}`; return `<tr><td><b>${esc(p.numero)}</b></td><td><a class="btn sec sm0" href="#/obra/${o.id}/recibo/${p.id}">Ver recibo</a></td><td><input type="date" data-b="${Q}.data" value="${esc(p.data)}"></td><td>${inp(Q + '.desc', { num: false, cls: 'w-n', ph: 'Ex.: Sinal (50 %)' })}</td><td>${inp(Q + '.valor', { cls: 'w-d' })}</td><td>${sel(Q + '.forma', FORMAS.map(x => [x, x]))}</td><td>${inp(Q + '.ref', { num: false, cls: 'w-p', ph: 'Opcional' })}</td><td><button class="ic" data-act="delPag" data-id="${p.id}" aria-label="Apagar pagamento">×</button></td></tr>`; }).join('')}
+  ${o.pagamentos.map((p, j) => { const Q = `${P}.pagamentos.${j}`; return `<tr><td>${p.numero ? `<b>${esc(p.numero)}</b>` : '<span class="muted small" title="Recebe o número quando houver internet">provisório</span>'}</td><td><a class="btn sec sm0" href="#/obra/${o.id}/recibo/${p.id}">Ver recibo</a></td><td><input type="date" data-b="${Q}.data" value="${esc(p.data)}"></td><td>${inp(Q + '.desc', { num: false, cls: 'w-n', ph: 'Ex.: Sinal (50 %)' })}</td><td>${inp(Q + '.valor', { cls: 'w-d' })}</td><td>${sel(Q + '.forma', FORMAS.map(x => [x, x]))}</td><td>${inp(Q + '.ref', { num: false, cls: 'w-p', ph: 'Opcional' })}</td><td><button class="ic" data-act="delPag" data-id="${p.id}" aria-label="Apagar pagamento">×</button></td></tr>`; }).join('')}
   </tbody></table></div>` : '<p class="muted">Ainda não há pagamentos.</p>'}
   <button class="btn sm" data-act="addPag">+ Registar pagamento</button>
   <label class="f full" style="margin-top:14px"><span>Texto do recibo: "referente a…"</span><textarea data-b="${P}.descRecibo" placeholder="${esc(descRecibo(o, true))}">${esc(o.descRecibo)}</textarea><small>Vazio = texto automático (mostrado a cinzento).</small></label>
@@ -502,9 +552,9 @@ function descRecibo(o, auto) {
 }
 function docHead(tipo, numero, data) {
   const E = S.cfg.empresa;
-  return `<header class="doc-h"><div><b class="doc-emp">${esc(E.nome || 'O seu nome / empresa')}</b>
+  return `<header class="doc-h"><div>${E.logo ? `<img class="doc-logo" data-img="${esc(E.logo)}" alt="${esc(E.nome || 'Logotipo')}">` : ''}${E.nome || !E.logo ? `<b class="doc-emp">${esc(E.nome || 'O seu nome / empresa')}</b>` : ''}
       <div class="doc-c">${[E.nuit && 'NUIT ' + esc(E.nuit), esc(E.tel), esc(E.email), esc(E.morada)].filter(Boolean).join(' · ')}</div></div>
-      <div class="doc-n"><span>${tipo}</span><b>Nº ${esc(numero || '—')}</b><small>${fData(data)}</small></div></header>`;
+      <div class="doc-n"><span>${tipo}</span><b>Nº ${esc(numero || 'PROVISÓRIO')}</b><small>${fData(data)}</small></div></header>`;
 }
 const docAviso = () => `<p class="muted small noprint">Para enviar em PDF: toque em "Imprimir / guardar PDF" e escolha <b>Guardar como PDF</b> (no iPhone: partilhar → Guardar em Ficheiros). Depois envie o PDF.${S.cfg.empresa.nome ? '' : ' Os dados da sua empresa preenchem-se em <a href="#/definicoes">Definições</a>.'}</p>`;
 function contaPag(o, p) {
@@ -849,7 +899,10 @@ function vDef() {
   const esc_ = E.map((e, j) => `<tr><td>${j === E.length - 1 ? '<span data-o="escLast"></span>' : `Até ${inp(`cfg.honor.escaloes.${j}.ate`, { cls: 'w-d' })} m²`}</td><td>${inp(`cfg.honor.escaloes.${j}.preco`, { cls: 'w-d' })} MT/m²</td><td>${E.length > 1 ? `<button class="ic" data-act="del" data-p="cfg.honor.escaloes.${j}" aria-label="Apagar">×</button>` : ''}</td></tr>`).join('');
   return `<div class="head"><h1>Definições</h1></div>
   ${info('<b>Definições:</b> os valores que o programa usa em todas as obras — honorários, descontos, traços do betão, blocos, perdas e os dados da sua empresa para o recibo.')}
-  <section class="box"><h2>A sua empresa (aparece no recibo)</h2><div class="grid2">
+  <section class="box"><h2>A sua empresa (aparece no recibo e na proposta)</h2>
+  <div class="logo-row">${S.cfg.empresa.logo ? `<div class="thumb logo"><img data-img="${esc(S.cfg.empresa.logo)}" alt="Logotipo"><button class="ic" data-act="delLogo" aria-label="Remover logotipo">×</button></div>` : '<div class="thumb logo vazio">Sem logotipo</div>'}
+  <div><b>Logotipo</b><p class="muted small" style="margin:4px 0 8px">Aparece no topo dos recibos e das propostas. Imagem PNG ou JPG, de preferência com fundo branco.</p><button class="btn sec sm0" data-act="addLogo">${S.cfg.empresa.logo ? 'Trocar logotipo' : 'Escolher logotipo'}</button></div></div>
+  <div class="grid2">
   ${fld('Nome / empresa', inp('cfg.empresa.nome', { num: false }))}${fld('NUIT', inp('cfg.empresa.nuit', { num: false }))}${fld('Telefone / WhatsApp', inp('cfg.empresa.tel', { num: false }))}${fld('Email', inp('cfg.empresa.email', { num: false }))}${fld('Morada', inp('cfg.empresa.morada', { num: false }))}${fld('Próximo nº de recibo', inp('cfg.recibo.proximo'))}${fld('Próximo nº de proposta', inp('cfg.proposta.proximo'))}
   </div></section>
 
@@ -894,6 +947,32 @@ function vDef() {
 
   <section class="box"><h2>Dados</h2><div class="row"><button class="btn sec" data-act="exportar">Exportar dados</button><button class="btn sec" data-act="importar">Importar dados</button><button class="btn danger" data-act="repor">Repor definições e preços de origem</button></div>
   <p class="muted small">PC Orçamentos ${VERSAO}</p></section>`;
+}
+
+/* --- Conta e sincronização --- */
+function vConta() {
+  const Y = window.SYNC;
+  const topo = `<div class="head"><h1>Conta e sincronização</h1></div>
+  ${info('Com a conta, você e o seu sócio veem <b>as mesmas obras, preços e recibos</b> em todos os aparelhos. O programa continua a funcionar sem internet: as alterações ficam guardadas e são enviadas quando a ligação voltar.')}`;
+  if (Y === undefined) return topo + '<section class="box"><p class="muted">A preparar a sincronização…</p></section>';
+  if (!Y) return topo + '<section class="box"><p>A sincronização ainda não está ligada nesta versão do programa. Por agora, os dados ficam só neste aparelho.</p></section>';
+  const e = Y.estado();
+  if (e.falhou) return topo + `<section class="box"><p>Não foi possível carregar a sincronização. Abra o programa uma vez com internet.</p><button class="btn" data-act="recarregar">Tentar de novo</button></section>`;
+  if (!e.email) return topo + `<section class="box" style="max-width:460px"><h2>Entrar</h2>
+    <label class="f"><span>Email</span><input id="c-email" type="email" autocomplete="username" inputmode="email"></label>
+    <label class="f" style="margin-top:10px"><span>Palavra-passe</span><input id="c-senha" type="password" autocomplete="current-password"></label>
+    <p class="err small" id="c-err" hidden></p>
+    <div class="row" style="margin-top:14px"><button class="btn" data-act="entrar">Entrar</button><button class="link" data-act="recuperar">Esqueci-me da palavra-passe</button></div>
+    <p class="muted small" style="margin-top:14px">As contas do escritório são criadas pelo administrador; não há registo aberto ao público.</p></section>`;
+  const nObras = S.obras.length;
+  const est = e.erro ? `<span class="err">${esc(e.erro)}</span>` : !e.online ? 'Sem internet — as alterações ficam guardadas e são enviadas quando a ligação voltar.' : (e.pend || !e.verificado) ? 'A sincronizar…' : 'Tudo sincronizado.';
+  return topo + `<section class="box"><h2>Ligado</h2>
+    <div class="kv"><span>Conta</span><b>${esc(e.email)}</b></div>
+    <div class="kv" style="margin-top:8px"><span>Estado</span><b>${est}</b></div>
+    <div class="kv" style="margin-top:8px"><span>Última sincronização</span><b>${e.ultimaSinc ? e.ultimaSinc.toLocaleString('pt-PT') : '—'}</b></div>
+    <div class="kv" style="margin-top:8px"><span>Obras neste aparelho</span><b>${nObras}</b></div>
+    <div class="row" style="margin-top:16px"><button class="btn danger" data-act="sair">Sair da conta</button></div>
+    <p class="muted small" style="margin-top:10px">Ao sair, os dados ficam neste aparelho mas deixam de sincronizar.</p></section>`;
 }
 
 /* ---------- novas linhas ---------- */
@@ -995,7 +1074,7 @@ $('#f-json').addEventListener('change', async e => {
     for (const [k, v] of Object.entries(imagens)) await IMG.set(k, v);
     pendJson = migrate(d);
     modal(`<h2>Importar dados</h2><p>O ficheiro tem <b>${pendJson.obras.length}</b> obra(s).</p>
-    <p class="muted small"><b>Juntar</b>: acrescenta as obras novas, atualiza as que já existem e fica com o preço mais recente de cada item.<br><b>Substituir</b>: apaga o que está neste aparelho e fica só com o ficheiro.</p>
+    <p class="muted small"><b>Juntar</b>: acrescenta as obras novas, atualiza as que já existem e fica com o preço mais recente de cada item.<br><b>Substituir</b>: apaga o que está neste aparelho e fica só com o ficheiro.${sincroniza() ? ' <b>Com a conta ligada, isto também se aplica ao seu sócio.</b>' : ''}</p>
     <div class="row end"><button class="btn sec" data-act="fecharModal">Cancelar</button><button class="btn danger" data-act="jsonSub">Substituir tudo</button><button class="btn" data-act="jsonJuntar">Juntar</button></div>`);
   } catch (err) { modal(`<h2>Não foi possível importar</h2><p>${esc(err.message)}</p><div class="row end"><button class="btn" data-act="fecharModal">Fechar</button></div>`); }
 });
@@ -1023,7 +1102,7 @@ function textoResumo(o) {
 }
 function textoRecibo(o, p) {
   const E = S.cfg.empresa, { h, antes, valor, pagoAte, falta } = contaPag(o, p);
-  const L = [`*RECIBO Nº ${p.numero}* — ${fData(p.data)}`, E.nome ? E.nome : ''].filter(Boolean);
+  const L = [`*RECIBO Nº ${p.numero || 'provisório'}* — ${fData(p.data)}`, E.nome ? E.nome : ''].filter(Boolean);
   L.push('', `Recebemos de *${o.cliente || '—'}*${o.nuit ? ` (NUIT ${o.nuit})` : ''} a quantia de *${mt(valor)}* (${extenso(valor)}), referente a: ${descRecibo(o)}${p.desc ? ' — ' + p.desc : ''}.`, '');
   if (h.desc > 0) L.push(`Valor do projeto: ${mt(h.antes)}`, `Desconto (${h.dNome}): − ${mt(h.desc)}`);
   L.push(`Valor total: ${mt(h.total)}`);
@@ -1104,7 +1183,8 @@ document.addEventListener('click', async e => {
     case 'copiar': partilhar('Orçamento — ' + o.nome, textoResumo(o)); return;
     case 'addPag': {
       const h = honor(o.honor), falta = Math.max(0, h.total - totalPago(o));
-      o.pagamentos.push({ id: uid(), numero: proximoNum('recibo'), data: hoje(), desc: '', valor: falta, forma: 'Numerário', ref: '' });
+      o.pagamentos.push({ id: uid(), numero: sincroniza() ? '' : proximoNum('recibo'), data: hoje(), desc: '', valor: falta, forma: 'Numerário', ref: '' });
+      if (sincroniza()) setTimeout(() => SYNC.numerar(), 400); // número único partilhado pelos sócios
       toast('Pagamento registado. Corrija o valor se for só uma parte.'); break;
     }
     case 'delPag': {
@@ -1114,7 +1194,7 @@ document.addEventListener('click', async e => {
     }
     case 'partilharRecibo': { const p = o.pagamentos.find(x => x.id === b.dataset.id); if (p) partilhar('Recibo ' + p.numero, textoRecibo(o, p)); return; }
     case 'abrirProposta':
-      if (!o.proposta.numero) { o.proposta.numero = proximoNum('proposta', 'P-'); saveNow(); }
+      if (!o.proposta.numero) { if (sincroniza()) SYNC.numerarProposta(o.id); else { o.proposta.numero = proximoNum('proposta', 'P-'); saveNow(); } }
       return; // o link segue para a proposta
     case 'partilharProposta': partilhar('Proposta ' + o.proposta.numero, textoProposta(o)); return;
     case 'addAb': o.aberturas.push({ id: uid(), tipo: 'janela', nome: 'Janela', n: 1, preco: 0 }); break;
@@ -1130,6 +1210,31 @@ document.addEventListener('click', async e => {
       f.click(); return;
     }
     case 'delImg': { const id = b.dataset.id; o.imgs = o.imgs.filter(x => x !== id); IMG.del(id); break; }
+    case 'addLogo': {
+      const f = document.createElement('input'); f.type = 'file'; f.accept = 'image/*';
+      f.onchange = async () => {
+        const file = f.files[0]; if (!file) return;
+        try {
+          const url = await reduzirImagem(file, 900, 'image/png'); const id = 'logo_' + uid();
+          await IMG.set(id, url.length > 900000 ? await reduzirImagem(file, 900) : url);
+          if (S.cfg.empresa.logo) IMG.del(S.cfg.empresa.logo);
+          S.cfg.empresa.logo = id; saveNow(); render(); toast('Logotipo guardado.');
+        } catch (err) { toast('Não foi possível usar esta imagem.'); }
+      };
+      f.click(); return;
+    }
+    case 'delLogo': if (S.cfg.empresa.logo) IMG.del(S.cfg.empresa.logo); S.cfg.empresa.logo = ''; break;
+    case 'entrar': case 'recuperar': {
+      const em = $('#c-email').value, pw = $('#c-senha').value, er = $('#c-err');
+      if (!em || (a === 'entrar' && !pw)) { er.textContent = a === 'entrar' ? 'Escreva o email e a palavra-passe.' : 'Escreva o seu email primeiro.'; er.hidden = false; return; }
+      b.disabled = true;
+      const r = a === 'entrar' ? await SYNC.entrar(em, pw) : await SYNC.recuperar(em);
+      b.disabled = false;
+      if (r) { er.textContent = r; er.hidden = false; } else if (a === 'recuperar') toast('Enviámos um email para mudar a palavra-passe.'); else toast('Bem-vindo! A sincronizar…');
+      return;
+    }
+    case 'sair': if (!confirm('Sair da conta neste aparelho? Os dados ficam guardados aqui, mas deixam de sincronizar.')) return; await SYNC.sair(); render(); return;
+    case 'recarregar': location.reload(); return;
     case 'hoje': [...S.precos, ...S.mo, ...S.cfg.blocos].forEach(p => p.data = hoje()); toast('Datas atualizadas.'); break;
     case 'addEsc': { const E = S.cfg.honor.escaloes; const prev = E.length > 1 ? +E[E.length - 2].ate : 0; E.splice(E.length - 1, 0, { ate: prev + 150, preco: E[E.length - 1].preco }); break; }
     case 'addServ': S.cfg.honor.servicos.push({ id: uid(), nome: 'Novo serviço', fator: 100 }); break;

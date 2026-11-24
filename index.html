@@ -18,7 +18,7 @@
 <body>
 <header class="top">
   <a href="#/" class="brand">PC<span>Orçamentos</span></a>
-  <nav id="nav"><a href="#/" data-v="">Obras</a><a href="#/precos" data-v="precos">Preços</a><a href="#/definicoes" data-v="definicoes">Definições</a></nav>
+  <nav id="nav"><a href="#/" data-v="">Obras</a><a href="#/precos" data-v="precos">Preços</a><a href="#/definicoes" data-v="definicoes">Definições</a><a href="#/conta" id="sync" class="sync off" data-v="conta" hidden title="Conta e sincronização"><i></i><span>Entrar</span></a></nav>
 </header>
 <main id="app"></main>
 <div id="modal" hidden></div>
@@ -27,5 +27,6 @@
 <input type="file" id="f-json" accept=".json,application/json" hidden>
 <script src="ifc.js"></script>
 <script src="app.js"></script>
+<script type="module" src="sync.js"></script>
 </body>
 </html>
