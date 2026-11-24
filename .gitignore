@@ -1,0 +1,5 @@
+# Ficheiros de teste e modelos de clientes nunca vão para o GitHub
+_teste/
+*.ifc
+*.json.bak
+orcamentos-*.json

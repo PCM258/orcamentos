@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PC Orçamentos</title>
+<meta name="description" content="Orçamentos de projeto e de obra: honorários, betão, alvenaria, materiais e mão de obra em meticais.">
+<meta name="theme-color" content="#0057FF">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Orçamentos">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <a href="#/" class="brand">PC<span>Orçamentos</span></a>
+  <nav id="nav"><a href="#/" data-v="">Obras</a><a href="#/precos" data-v="precos">Preços</a><a href="#/definicoes" data-v="definicoes">Definições</a></nav>
+</header>
+<main id="app"></main>
+<div id="modal" hidden></div>
+<div id="toast" hidden></div>
+<input type="file" id="f-ifc" accept=".ifc" hidden>
+<input type="file" id="f-json" accept=".json,application/json" hidden>
+<script src="ifc.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
