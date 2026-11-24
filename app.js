@@ -3,8 +3,9 @@
    Honorários de projeto (descontos, proposta, pagamentos e recibos), estrutura em betão por traço,
    alvenaria por tipo de bloco, portas e janelas, materiais por piso e mão de obra em meticais.
    Dados no próprio aparelho; exportar/importar para partilhar. */
-const VERSAO = '0.4.0';
+const VERSAO = '0.4.1';
 const KEY = 'pcorc.v1';
+const LOGO_PADRAO = 'icons/logo-empresa.webp'; // logotipo da 301 Group, usado quando não há outro carregado
 let S;            // estado
 let outs = null;  // valores calculados da vista atual (atualizam enquanto escreve)
 let pendIfc = null, pendJson = null;
@@ -104,7 +105,7 @@ function defaults() {
       { id: 'mo_reb', nome: 'Reboco (por face)', un: 'm²', preco: 200, data: d }
     ],
     cfg: {
-      empresa: { nome: '', nuit: '', tel: '', email: '', morada: '' },
+      empresa: { nome: '301 Group', nuit: '', tel: '', email: '', morada: '' },
       recibo: { proximo: 1 },
       proposta: {
         proximo: 1, validade: 30,
@@ -169,6 +170,7 @@ function migrate(o) {
   o.cfg = Object.assign({}, d.cfg, o.cfg || {});
   for (const k of ['honor', 'perdas', 'aco', 'betao', 'recibo', 'proposta']) o.cfg[k] = Object.assign({}, d.cfg[k], o.cfg[k] || {});
   if (typeof o.cfg.empresa === 'string' || !o.cfg.empresa) o.cfg.empresa = Object.assign({}, d.cfg.empresa, { nome: o.cfg.empresa || '' });
+  if (!o.cfg.empresa.nome) o.cfg.empresa.nome = d.cfg.empresa.nome; // nunca mostrar "O seu nome / empresa"
   if (!(o.cfg.classes || []).every(c => Array.isArray(c.traco))) o.cfg.classes = defClasses();        // versão 0.1 → traços
   if (!o.cfg.assent || !Array.isArray(o.cfg.assent.traco)) o.cfg.assent = d.cfg.assent;
   if (!o.cfg.reboco || !Array.isArray(o.cfg.reboco.traco)) o.cfg.reboco = Object.assign({}, d.cfg.reboco, { esp: (o.cfg.reboco && o.cfg.reboco.esp) || 1.5 });
@@ -242,7 +244,7 @@ async function hidratarImgs() {
   for (const el of document.querySelectorAll('img[data-img]')) {
     const id = el.dataset.img; let v = await IMG.get(id);
     if (!v && sincroniza()) { v = await SYNC.imgGet(id); if (v) IMG.set(id, v, true); }
-    if (v) el.src = v; else (el.closest('.thumb, figure') || el).remove();
+    if (v) el.src = v; else if (!el.dataset.padrao) (el.closest('.thumb, figure') || el).remove(); // o logotipo de origem fica se a imagem não existir
   }
 }
 function reduzirImagem(file, max = 1600, tipo = 'image/jpeg') {
@@ -552,7 +554,8 @@ function descRecibo(o, auto) {
 }
 function docHead(tipo, numero, data) {
   const E = S.cfg.empresa;
-  return `<header class="doc-h"><div>${E.logo ? `<img class="doc-logo" data-img="${esc(E.logo)}" alt="${esc(E.nome || 'Logotipo')}">` : ''}${E.nome || !E.logo ? `<b class="doc-emp">${esc(E.nome || 'O seu nome / empresa')}</b>` : ''}
+  // Canto superior esquerdo: o logotipo da empresa (o carregado em Definições ou, por defeito, o da 301 Group)
+  return `<header class="doc-h"><div><img class="doc-logo" src="${LOGO_PADRAO}" ${E.logo ? `data-img="${esc(E.logo)}" data-padrao="1"` : ''} alt="${esc(E.nome || 'Logotipo')}">
       <div class="doc-c">${[E.nuit && 'NUIT ' + esc(E.nuit), esc(E.tel), esc(E.email), esc(E.morada)].filter(Boolean).join(' · ')}</div></div>
       <div class="doc-n"><span>${tipo}</span><b>Nº ${esc(numero || 'PROVISÓRIO')}</b><small>${fData(data)}</small></div></header>`;
 }
@@ -900,7 +903,7 @@ function vDef() {
   return `<div class="head"><h1>Definições</h1></div>
   ${info('<b>Definições:</b> os valores que o programa usa em todas as obras — honorários, descontos, traços do betão, blocos, perdas e os dados da sua empresa para o recibo.')}
   <section class="box"><h2>A sua empresa (aparece no recibo e na proposta)</h2>
-  <div class="logo-row">${S.cfg.empresa.logo ? `<div class="thumb logo"><img data-img="${esc(S.cfg.empresa.logo)}" alt="Logotipo"><button class="ic" data-act="delLogo" aria-label="Remover logotipo">×</button></div>` : '<div class="thumb logo vazio">Sem logotipo</div>'}
+  <div class="logo-row">${S.cfg.empresa.logo ? `<div class="thumb logo"><img src="${LOGO_PADRAO}" data-img="${esc(S.cfg.empresa.logo)}" data-padrao="1" alt="Logotipo"><button class="ic" data-act="delLogo" aria-label="Voltar ao logotipo de origem">×</button></div>` : `<div class="thumb logo"><img src="${LOGO_PADRAO}" alt="Logotipo 301 Group"></div>`}
   <div><b>Logotipo</b><p class="muted small" style="margin:4px 0 8px">Aparece no topo dos recibos e das propostas. Imagem PNG ou JPG, de preferência com fundo branco.</p><button class="btn sec sm0" data-act="addLogo">${S.cfg.empresa.logo ? 'Trocar logotipo' : 'Escolher logotipo'}</button></div></div>
   <div class="grid2">
   ${fld('Nome / empresa', inp('cfg.empresa.nome', { num: false }))}${fld('NUIT', inp('cfg.empresa.nuit', { num: false }))}${fld('Telefone / WhatsApp', inp('cfg.empresa.tel', { num: false }))}${fld('Email', inp('cfg.empresa.email', { num: false }))}${fld('Morada', inp('cfg.empresa.morada', { num: false }))}${fld('Próximo nº de recibo', inp('cfg.recibo.proximo'))}${fld('Próximo nº de proposta', inp('cfg.proposta.proximo'))}
