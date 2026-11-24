@@ -1,6 +1,6 @@
 // Funciona sem internet: tenta a rede primeiro (para receber atualizações) e usa a cópia guardada quando não há ligação.
 // Os módulos do Firebase (gstatic, com versão fixa no endereço) ficam guardados para abrir sem internet.
-const CACHE = 'pcorc-v5';
+const CACHE = 'pcorc-v6';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'ifc.js', 'sync.js', 'firebase-config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/logo-empresa.webp'];
 

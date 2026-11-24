@@ -3,7 +3,7 @@
    Honorários de projeto (descontos, proposta, pagamentos e recibos), estrutura em betão por traço,
    alvenaria por tipo de bloco, portas e janelas, materiais por piso e mão de obra em meticais.
    Dados no próprio aparelho; exportar/importar para partilhar. */
-const VERSAO = '0.4.1';
+const VERSAO = '0.5.0';
 const KEY = 'pcorc.v1';
 const LOGO_PADRAO = 'icons/logo-empresa.webp'; // logotipo da 301 Group, usado quando não há outro carregado
 let S;            // estado
@@ -466,7 +466,7 @@ function render() {
   if (v === 'obra') {
     const i = S.obras.findIndex(o => o.id === id);
     if (i < 0) { location.hash = '#/'; return; }
-    html = tab === 'recibo' ? vRecibo(S.obras[i], extra) : tab === 'propdoc' ? vProposta(S.obras[i]) : vObra(i, tab || 'dados');
+    html = tab === 'recibo' ? vRecibo(S.obras[i], extra) : tab === 'propdoc' ? vProposta(S.obras[i]) : tab === 'rapida' ? vRapida(i) : vObra(i, tab || 'dados');
   } else if (v === 'precos') html = vPrecos();
   else if (v === 'definicoes') html = vDef();
   else if (v === 'conta') html = vConta();
@@ -484,12 +484,12 @@ const det = (k, titulo, corpo, abertoPorDefeito) => `<details data-k="${k}" ${ab
 
 function vObras() {
   const list = S.obras.slice().sort((a, b) => (b.data || '').localeCompare(a.data || ''));
-  return `<div class="head"><h1>Obras</h1><button class="btn" data-act="nova">+ Nova obra</button></div>
-  ${info('Cada obra tem o seu orçamento: <b>honorários do projeto</b>, <b>estrutura</b> (betão), <b>alvenaria</b> (blocos), <b>mão de obra</b> e um <b>resumo</b> com o total. Toque numa obra para a abrir.')}
+  return `<div class="head"><h1>Obras e propostas</h1><div class="row"><button class="btn" data-act="novaProposta">+ Nova proposta</button><button class="btn sec" data-act="nova">+ Nova obra</button></div></div>
+  ${info('<b>Nova proposta</b>: só os dados do cliente e a área; em um minuto tem a proposta em PDF e o recibo. <b>Nova obra</b>: o orçamento completo, com estrutura (betão), alvenaria, mão de obra e resumo.')}
   ${list.length ? `<div class="cards">${list.map(o => {
     const r = calcObra(o), h = honor(o.honor);
-    return `<a class="card" href="#/obra/${o.id}/dados"><b>${esc(o.nome || 'Sem nome')}</b><span>${esc([o.cliente, o.local].filter(Boolean).join(' · ') || 'Sem cliente')} · ${fData(o.data)}</span>
-      <div class="kv"><span>Obra</span><b>${mt0(r.total)}</b></div>
+    return `<a class="card" href="#/obra/${o.id}/${o.rapida ? 'rapida' : 'dados'}"><b>${o.rapida ? '<span class="tag">Proposta</span> ' : ''}${esc(o.rapida ? (o.cliente || 'Nova proposta') : (o.nome || 'Sem nome'))}</b><span>${esc((o.rapida ? [o.nome, o.local] : [o.cliente, o.local]).filter(Boolean).join(' · ') || 'Sem cliente')} · ${fData(o.data)}</span>
+      ${o.rapida && !r.total ? '' : `<div class="kv"><span>Obra</span><b>${mt0(r.total)}</b></div>`}
       <div class="kv"><span>Projeto</span><b>${h.a > 0 ? mt0(h.total) : '—'}</b></div>
       ${o.pagamentos.length ? (() => { const f = h.total - totalPago(o); return `<div class="kv"><span>Pagamentos</span><b>${f > 0 ? 'falta ' + mt0(f) : 'pago'}</b></div>`; })() : ''}</a>`;
   }).join('')}</div>` : `<div class="box empty"><p><b>Ainda não há obras.</b></p><p>Crie a primeira para calcular honorários, betão, alvenaria e o custo total.</p></div>`}
@@ -505,15 +505,75 @@ function vObra(i, tab) {
   outs = () => ({ titulo: o.nome || 'Sem nome', total: mt0(calcObra(o).total) });
   const mt_ = sincroniza() && SYNC.meta(o.id);
   const alt = mt_ && mt_.por ? `<small class="muted">Última alteração: ${esc(mt_.por)}${mt_.em ? ' · ' + mt_.em.toLocaleString('pt-PT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</small>` : '';
-  const head = `<div class="head"><div><a href="#/" class="back">← Obras</a><h1 data-o="titulo"></h1>${alt}</div><div class="tot"><small>Total da obra</small><b data-o="total"></b></div></div>`;
+  const head = `<div class="head"><div><a href="#/" class="back">← Obras</a>${o.rapida ? ` <a href="#/obra/${o.id}/rapida" class="back">· Voltar à proposta rápida</a>` : ''}<h1 data-o="titulo"></h1>${alt}</div><div class="tot"><small>Total da obra</small><b data-o="total"></b></div></div>`;
   const tabs = `<nav class="tabs">${TABS.map(([k, t]) => `<a href="#/obra/${o.id}/${k}" class="${k === tab ? 'on' : ''}">${t}</a>`).join('')}</nav>`;
   const f = { dados: tDados, projeto: tProjeto, estrutura: tEstrutura, alvenaria: tAlvenaria, mo: tMO, resumo: tResumo, proposta: tProposta }[tab] || tDados;
   return head + tabs + f(o, P);
 }
 
+/* --- Proposta rápida: uma só página (cliente, área, serviço, desconto → proposta e recibo) --- */
+const rotulo = o => o.nome || 'Projeto';
+function vRapida(i) {
+  const o = S.obras[i], P = `obras.${i}`, H = S.cfg.honor, D = S.cfg.proposta, Pr = o.proposta, ds = o.honor.desconto;
+  outs = () => {
+    const h = honor(o.honor), v = ou(Pr.validade, D.validade);
+    return { titulo: o.cliente ? `Proposta para ${o.cliente}` : 'Nova proposta', hTot: h.a > 0 ? mt0(h.total) : '—',
+      hTab: h.a > 0 ? tabHonor(h) : '<p class="muted">Escreva a área a construir para ver o valor.</p>', pVal: `${fData(dataMais(Pr.data, v))}` };
+  };
+  return `<div class="head"><div><a href="#/" class="back">← Início</a><h1 data-o="titulo"></h1></div><div class="tot"><small>Valor do projeto</small><b data-o="hTot"></b></div></div>
+  ${info('<b>Proposta rápida:</b> escreva os dados do cliente e a área; o valor calcula-se sozinho. Depois toque em <b>Ver proposta</b> para guardar em PDF ou enviar. Quando o cliente pagar, registe o pagamento e emita o recibo nesta mesma página.')}
+  <section class="box"><h2>1. Cliente</h2><div class="grid2">
+  ${fld('Nome do cliente', inp(P + '.cliente', { num: false, ph: 'Ex.: João Matsinhe' }))}
+  ${fld('Telefone / WhatsApp', inp(P + '.tel', { num: false, ph: '+258 …' }))}
+  ${fld('Email', inp(P + '.email', { num: false, ph: 'Opcional' }))}
+  ${fld('NUIT', inp(P + '.nuit', { num: false, ph: 'Opcional' }))}
+  ${fld('Local do terreno', inp(P + '.local', { num: false, ph: 'Ex.: Beira, Manga' }))}
+  </div></section>
+  <section class="box"><h2>2. Projeto</h2><div class="grid2">
+  ${fld('Tipo de projeto', inp(P + '.nome', { num: false, ph: 'Ex.: Moradia T3' }))}
+  ${fld('Área a construir (m²)', inp(P + '.honor.area', { ph: 'Ex.: 150' }), 'Área de construção de cada casa.')}
+  ${fld('Casas iguais (geminadas)', sel(P + '.honor.casas', [1, 2, 3, 4, 5, 6, 8, 10].map(n => [n, n === 1 ? '1 casa' : n + ' casas']), true), `Cada casa a mais paga ${fmt(H.geminada, 0)} % da parte por m².`)}
+  ${fld('Serviço', sel(P + '.honor.servico', H.servicos.map(s => [s.id, `${s.nome} (${fmt(s.fator, 0)} %)`])))}
+  ${fld('Desconto', sel(P + '.honor.desconto', [['', 'Sem desconto'], ...S.cfg.descontos.map(d => [d.id, `${d.nome} (${fmtA(d.pct)} %)`]), ['outro', 'Outro desconto…']]))}
+  ${ds === 'outro' ? fld('Motivo do desconto', inp(P + '.honor.descMotivo', { num: false, ph: 'Ex.: pagamento a pronto' })) + fld('Desconto (%)', inp(P + '.honor.descPct')) + fld('Ou valor fixo (MT)', inp(P + '.honor.descValor')) : ''}
+  ${fld('Prazo de entrega', inp(P + '.proposta.prazo', { num: false, ph: D.prazo }))}
+  ${fld('Validade da proposta (dias)', inp(P + '.proposta.validade', { nul: true, ph: numIn(D.validade) }), 'Válida até <span data-o="pVal"></span>')}
+  </div>
+  ${det('rapida-mais', 'Mais opções: o que inclui, condições de pagamento e notas', `<div class="grid2" style="padding:6px 0 12px">
+    <label class="f full"><span>O projeto inclui (uma linha por item)</span><textarea data-b="${P}.proposta.inclui" placeholder="${esc(D.inclui)}" rows="4">${esc(Pr.inclui)}</textarea></label>
+    <label class="f full"><span>Condições de pagamento (uma linha por item)</span><textarea data-b="${P}.proposta.condicoes" placeholder="${esc(D.condicoes)}" rows="3">${esc(Pr.condicoes)}</textarea></label>
+    <label class="f full"><span>Notas (opcional)</span><textarea data-b="${P}.proposta.notas" rows="2">${esc(Pr.notas)}</textarea></label></div>`, false)}
+  </section>
+  <section class="box res"><small>Honorários do projeto</small><b class="big" data-o="hTot"></b><div data-oh="hTab"></div>
+  <div class="row" style="margin-top:16px"><a class="btn" href="#/obra/${o.id}/propdoc" data-act="abrirProposta">Ver proposta (PDF)</a><button class="btn sec" data-act="partilharProposta">Enviar pelo WhatsApp</button></div></section>
+  ${secPagamentos(o, P, 'Quando o cliente pagar o sinal ou o valor total, toque em «+ Registar pagamento» e depois em «Ver recibo» para o entregar.')}
+  ${secImagens(o)}
+  <div class="row end"><a class="btn sec" href="#/obra/${o.id}/dados">Fazer também o orçamento da obra</a><button class="btn danger" data-act="apagarObra">Apagar proposta</button></div>`;
+}
+
 /* --- Dados + recibo --- */
-function tDados(o, P) {
+// Secções partilhadas pela obra completa e pela proposta rápida
+function secPagamentos(o, P, intro) {
   chain(() => { const h = honor(o.honor), pago = totalPago(o); return { rProj: h.a > 0 ? mt0(h.total) : '—', rPago: mt0(pago), rFalta: mt0(Math.max(0, h.total - pago)) }; });
+  return `<section class="box"><h2>Pagamentos e recibos</h2>
+  <p class="muted small">${intro || 'Registe cada pagamento do cliente (sinal, prestações, pagamento final). Cada pagamento tem o seu recibo, com número próprio, que pode imprimir, guardar em PDF ou enviar.'}</p>
+  <div class="totals" style="margin-bottom:12px"><div><small>Valor do projeto</small><b data-o="rProj"></b></div><div><small>Já pago</small><b data-o="rPago"></b></div><div><small>Em falta</small><b data-o="rFalta" style="color:var(--blue)"></b></div></div>
+  ${o.pagamentos.length ? `<div class="tw"><table><thead><tr><th>Recibo nº</th><th></th><th>Data</th><th>Descrição</th><th>Valor (MT)</th><th>Forma</th><th>Referência</th><th></th></tr></thead><tbody>
+  ${o.pagamentos.map((p, j) => { const Q = `${P}.pagamentos.${j}`; return `<tr><td>${p.numero ? `<b>${esc(p.numero)}</b>` : '<span class="muted small" title="Recebe o número quando houver internet">provisório</span>'}</td><td><a class="btn sec sm0" href="#/obra/${o.id}/recibo/${p.id}">Ver recibo</a></td><td><input type="date" data-b="${Q}.data" value="${esc(p.data)}"></td><td>${inp(Q + '.desc', { num: false, cls: 'w-n', ph: 'Ex.: Sinal (50 %)' })}</td><td>${inp(Q + '.valor', { cls: 'w-d' })}</td><td>${sel(Q + '.forma', FORMAS.map(x => [x, x]))}</td><td>${inp(Q + '.ref', { num: false, cls: 'w-p', ph: 'Opcional' })}</td><td><button class="ic" data-act="delPag" data-id="${p.id}" aria-label="Apagar pagamento">×</button></td></tr>`; }).join('')}
+  </tbody></table></div>` : '<p class="muted">Ainda não há pagamentos.</p>'}
+  <button class="btn sm" data-act="addPag">+ Registar pagamento</button>
+  <label class="f full" style="margin-top:14px"><span>Texto do recibo: "referente a…"</span><textarea data-b="${P}.descRecibo" placeholder="${esc(descRecibo(o, true))}">${esc(o.descRecibo)}</textarea><small>Vazio = texto automático (mostrado a cinzento).</small></label>
+  </section>`;
+}
+function secImagens(o) {
+  return `<section class="box"><h2>Imagens do projeto (opcional)</h2>
+  <p class="muted small">Até 4 renders ou plantas. Aparecem na proposta (a primeira em destaque) e nos recibos.</p>
+  <div class="thumbs">${o.imgs.map(id => `<div class="thumb"><img data-img="${id}" alt="Render"><button class="ic" data-act="delImg" data-id="${id}" aria-label="Remover imagem">×</button></div>`).join('')}
+  ${o.imgs.length < 4 ? `<button class="thumb add" data-act="addImg">+ Imagem</button>` : ''}</div>
+  </section>`;
+}
+
+function tDados(o, P) {
   return `${info('Aqui ficam os <b>dados do cliente e da obra</b>, os <b>pagamentos com os seus recibos</b> e as imagens do projeto. A área de construção serve para o custo por m² e para a mão de obra.')}
   <section class="box"><h2>Cliente e obra</h2><div class="grid2">
   ${fld('Nome da obra', inp(P + '.nome', { num: false }))}
@@ -529,28 +589,14 @@ function tDados(o, P) {
   <label class="f chk"><input type="checkbox" data-b="${P}.iva" ${o.iva ? 'checked' : ''}><span>Somar IVA (${fmt(S.cfg.iva, 0)} %) ao orçamento da obra</span></label>
   <label class="f full"><span>Notas</span><textarea data-b="${P}.notas">${esc(o.notas)}</textarea></label>
   </div></section>
-
-  <section class="box"><h2>Pagamentos e recibos</h2>
-  <p class="muted small">Registe cada pagamento do cliente (sinal, prestações, pagamento final). Cada pagamento tem o seu recibo, com número próprio, que pode imprimir, guardar em PDF ou enviar.</p>
-  <div class="totals" style="margin-bottom:12px"><div><small>Valor do projeto</small><b data-o="rProj"></b></div><div><small>Já pago</small><b data-o="rPago"></b></div><div><small>Em falta</small><b data-o="rFalta" style="color:var(--blue)"></b></div></div>
-  ${o.pagamentos.length ? `<div class="tw"><table><thead><tr><th>Recibo nº</th><th></th><th>Data</th><th>Descrição</th><th>Valor (MT)</th><th>Forma</th><th>Referência</th><th></th></tr></thead><tbody>
-  ${o.pagamentos.map((p, j) => { const Q = `${P}.pagamentos.${j}`; return `<tr><td>${p.numero ? `<b>${esc(p.numero)}</b>` : '<span class="muted small" title="Recebe o número quando houver internet">provisório</span>'}</td><td><a class="btn sec sm0" href="#/obra/${o.id}/recibo/${p.id}">Ver recibo</a></td><td><input type="date" data-b="${Q}.data" value="${esc(p.data)}"></td><td>${inp(Q + '.desc', { num: false, cls: 'w-n', ph: 'Ex.: Sinal (50 %)' })}</td><td>${inp(Q + '.valor', { cls: 'w-d' })}</td><td>${sel(Q + '.forma', FORMAS.map(x => [x, x]))}</td><td>${inp(Q + '.ref', { num: false, cls: 'w-p', ph: 'Opcional' })}</td><td><button class="ic" data-act="delPag" data-id="${p.id}" aria-label="Apagar pagamento">×</button></td></tr>`; }).join('')}
-  </tbody></table></div>` : '<p class="muted">Ainda não há pagamentos.</p>'}
-  <button class="btn sm" data-act="addPag">+ Registar pagamento</button>
-  <label class="f full" style="margin-top:14px"><span>Texto do recibo: "referente a…"</span><textarea data-b="${P}.descRecibo" placeholder="${esc(descRecibo(o, true))}">${esc(o.descRecibo)}</textarea><small>Vazio = texto automático (mostrado a cinzento).</small></label>
-  </section>
-
-  <section class="box"><h2>Imagens do projeto (opcional)</h2>
-  <p class="muted small">Até 4 renders ou plantas. Aparecem na proposta (a primeira em destaque) e nos recibos.</p>
-  <div class="thumbs">${o.imgs.map(id => `<div class="thumb"><img data-img="${id}" alt="Render"><button class="ic" data-act="delImg" data-id="${id}" aria-label="Remover imagem">×</button></div>`).join('')}
-  ${o.imgs.length < 4 ? `<button class="thumb add" data-act="addImg">+ Imagem</button>` : ''}</div>
-  </section>
+  ${secPagamentos(o, P)}
+  ${secImagens(o)}
   <div class="row end"><button class="btn sec" data-act="duplicarObra">Duplicar obra</button><button class="btn danger" data-act="apagarObra">Apagar obra</button></div>`;
 }
 function descRecibo(o, auto) {
   if (!auto && o.descRecibo) return o.descRecibo;
   const h = honor(o.honor);
-  return `${h.serv.nome} — ${o.nome || 'obra'}${o.local ? ', ' + o.local : ''} (${fmtA(h.a)} m²${h.casas > 1 ? `, ${h.casas} casas iguais` : ''})`;
+  return `${h.serv.nome} — ${rotulo(o)}${o.local ? ', ' + o.local : ''} (${fmtA(h.a)} m²${h.casas > 1 ? `, ${h.casas} casas iguais` : ''})`;
 }
 function docHead(tipo, numero, data) {
   const E = S.cfg.empresa;
@@ -569,7 +615,7 @@ function vRecibo(o, pid) {
   const p = o.pagamentos.find(x => x.id === pid);
   if (!p) return `<div class="box"><p>Este pagamento já não existe.</p><a class="btn" href="#/obra/${o.id}/dados">Voltar</a></div>`;
   const E = S.cfg.empresa, { h, antes, valor, pagoAte, falta } = contaPag(o, p);
-  return `<div class="bar noprint"><a href="#/obra/${o.id}/dados" class="btn sec">← Voltar</a><button class="btn" data-act="imprimir">Imprimir / guardar PDF</button><button class="btn sec" data-act="partilharRecibo" data-id="${p.id}">Enviar por WhatsApp / email</button></div>
+  return `<div class="bar noprint"><a href="#/obra/${o.id}/${o.rapida ? 'rapida' : 'dados'}" class="btn sec">← Voltar</a><button class="btn" data-act="imprimir">Imprimir / guardar PDF</button><button class="btn sec" data-act="partilharRecibo" data-id="${p.id}">Enviar por WhatsApp / email</button></div>
   ${docAviso()}
   <article class="doc">
     ${docHead('RECIBO', p.numero, p.data)}
@@ -648,11 +694,11 @@ function vProposta(o) {
     ${Pr.quant && r.mat.length ? `<p class="doc-mini"><b>Principais materiais:</b> ${r.mat.map(m => `${esc(m.nome)} ${fmt(m.qtd, m.un === 'un' || m.un === 'sacos' || m.un === 'kg' ? 0 : 2)} ${esc(m.un)}`).join(' · ')}</p>` : ''}
     <p class="doc-mini">Valores estimados com os preços de mercado à data da proposta; podem variar com o preço dos materiais.</p>` : '';
   const imgs = o.imgs;
-  return `<div class="bar noprint"><a href="#/obra/${o.id}/proposta" class="btn sec">← Voltar</a><button class="btn" data-act="imprimir">Imprimir / guardar PDF</button><button class="btn sec" data-act="partilharProposta">Enviar por WhatsApp / email</button></div>
+  return `<div class="bar noprint"><a href="#/obra/${o.id}/${o.rapida ? 'rapida' : 'proposta'}" class="btn sec">← Voltar</a><button class="btn" data-act="imprimir">Imprimir / guardar PDF</button><button class="btn sec" data-act="partilharProposta">Enviar por WhatsApp / email</button></div>
   ${docAviso()}
   <article class="doc">
     ${docHead('PROPOSTA', Pr.numero, Pr.data)}
-    <p class="doc-p">Exmo.(a) Sr.(a) <b>${esc(o.cliente || 'Cliente')}</b>,<br>apresentamos a nossa proposta para <b>${esc(o.nome)}</b>${o.local ? `, em ${esc(o.local)}` : ''}.</p>
+    <p class="doc-p">Exmo.(a) Sr.(a) <b>${esc(o.cliente || 'Cliente')}</b>,<br>apresentamos a nossa proposta para <b>${esc(o.nome || 'o seu projeto')}</b>${o.local ? `, em ${esc(o.local)}` : ''}.</p>
     ${imgs.length ? `<figure class="doc-hero"><img data-img="${imgs[0]}" alt="Render do projeto"></figure>` : ''}
     ${projeto}${obra}
     ${sec('Condições')}
@@ -1119,8 +1165,8 @@ function textoRecibo(o, p) {
 function textoProposta(o) {
   const E = S.cfg.empresa, Pr = o.proposta, D = S.cfg.proposta, h = honor(o.honor), r = calcObra(o);
   const val = ou(Pr.validade, D.validade);
-  const L = [`*PROPOSTA Nº ${Pr.numero}* — ${fData(Pr.data)}`, E.nome || ''].filter(Boolean);
-  L.push('', `Para: ${o.cliente || '—'}`, `Obra: ${o.nome}${o.local ? ', ' + o.local : ''}`);
+  const L = [`*PROPOSTA Nº ${Pr.numero || 'provisória'}* — ${fData(Pr.data)}`, E.nome || ''].filter(Boolean);
+  L.push('', `Para: ${o.cliente || '—'}`, `Projeto: ${rotulo(o)}${o.local ? ', ' + o.local : ''}`);
   if (Pr.projeto) {
     L.push('', '*Projeto*', `${h.serv.nome} — ${fmtA(h.a)} m²${h.casas > 1 ? ` × ${h.casas} casas` : ''}`);
     linhas(ou(Pr.inclui, D.inclui)).forEach(x => L.push('• ' + x));
@@ -1165,6 +1211,12 @@ document.addEventListener('click', async e => {
   const a = b.dataset.act, o = curObra();
   switch (a) {
     case 'nova': { const ob = novaObra(); S.obras.push(ob); saveNow(); location.hash = `#/obra/${ob.id}/dados`; return; }
+    case 'novaProposta': {
+      const ob = novaObra(); ob.rapida = true; ob.nome = 'Moradia'; ob.proposta.projeto = true; ob.proposta.obra = false;
+      S.obras.push(ob); saveNow(); location.hash = `#/obra/${ob.id}/rapida`;
+      setTimeout(() => { const c = document.querySelector('[data-b$=".cliente"]'); if (c) c.focus(); }, 80);
+      return;
+    }
     case 'apagarObra': if (!confirm(`Apagar a obra "${o.nome}"? Não é possível desfazer.`)) return; (o.imgs || []).forEach(id => IMG.del(id)); S.obras = S.obras.filter(x => x !== o); saveNow(); location.hash = '#/'; return;
     case 'duplicarObra': { const c = JSON.parse(JSON.stringify(o)); c.id = uid(); c.nome += ' (cópia)'; c.pagamentos = []; c.imgs = []; c.proposta.numero = ''; S.obras.push(c); saveNow(); location.hash = `#/obra/${c.id}/dados`; toast('Obra duplicada.'); return; }
     case 'areaObra': o.honor.area = +o.area || 0; break;
@@ -1196,10 +1248,15 @@ document.addEventListener('click', async e => {
       o.pagamentos = o.pagamentos.filter(x => x !== p); break;
     }
     case 'partilharRecibo': { const p = o.pagamentos.find(x => x.id === b.dataset.id); if (p) partilhar('Recibo ' + p.numero, textoRecibo(o, p)); return; }
-    case 'abrirProposta':
-      if (!o.proposta.numero) { if (sincroniza()) SYNC.numerarProposta(o.id); else { o.proposta.numero = proximoNum('proposta', 'P-'); saveNow(); } }
-      return; // o link segue para a proposta
-    case 'partilharProposta': partilhar('Proposta ' + o.proposta.numero, textoProposta(o)); return;
+    case 'abrirProposta': case 'partilharProposta': {
+      if (o.rapida && (!o.cliente || !(+o.honor.area > 0))) { e.preventDefault(); toast('Escreva o nome do cliente e a área a construir.'); return; }
+      if (!o.proposta.numero) {
+        if (sincroniza()) { const pr = SYNC.numerarProposta(o.id); if (a === 'partilharProposta') await pr; }
+        else { o.proposta.numero = proximoNum('proposta', 'P-'); saveNow(); }
+      }
+      if (a === 'partilharProposta') partilhar('Proposta ' + (o.proposta.numero || ''), textoProposta(o));
+      return; // «Ver proposta» é um link: segue para o documento
+    }
     case 'addAb': o.aberturas.push({ id: uid(), tipo: 'janela', nome: 'Janela', n: 1, preco: 0 }); break;
     case 'addImg': {
       const f = document.createElement('input'); f.type = 'file'; f.accept = 'image/*'; f.multiple = true;

@@ -79,6 +79,7 @@ tr.off td{opacity:.45}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;text-decoration:none;color:var(--ink);display:grid;gap:4px}
 .card:hover{border-color:var(--blue)}
 .card>span{color:var(--mut);font-size:14px;margin-bottom:6px}
+.tag{display:inline-block;background:var(--blue2);color:var(--blue);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;vertical-align:2px}
 .kv{display:flex;justify-content:space-between;gap:8px;font-size:14px}
 .kv span{color:var(--mut)}
 .empty{text-align:center;padding:36px 16px;color:var(--mut)}
